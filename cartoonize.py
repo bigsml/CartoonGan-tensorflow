@@ -160,7 +160,7 @@ def save_concatenated_image(image_paths, image_folder="comparison", num_columns=
         logger.debug(f"Wrong `comparison_view`: {args.comparison_view}")
 
     images_comb = PIL.Image.fromarray(images_comb)
-    file_name = image_paths[0].split("/")[-1]
+    file_name = image_paths[0].split(os.path.sep)[-1]
 
     if args.output_dir not in image_folder:
         image_folder = os.path.join(args.output_dir, image_folder)
@@ -174,7 +174,7 @@ def save_concatenated_image(image_paths, image_folder="comparison", num_columns=
 
 def convert_gif_to_png(gif_path):
     logger.debug(f"`{gif_path}` is a gif, extracting png images from it...")
-    gif_filename = gif_path.split("/")[-1].replace(".gif", "")
+    gif_filename = gif_path.split(os.path.sep)[-1].replace(".gif", "")
     image = PIL.Image.open(gif_path)
     palette = image.getpalette()
     png_paths = list()
@@ -225,8 +225,9 @@ def convert_gif_to_png(gif_path):
 
 
 def transform_png_images(image_paths, model, style, return_existing_result=False):
+    sep = os.path.sep
     transformed_image_paths = list()
-    save_dir = os.path.join("/".join(image_paths[0].split("/")[:-1]), style)
+    save_dir = os.path.join(sep.join(image_paths[0].split(sep)[:-1]), style)
     logger.debug(f"Transforming {len(image_paths)} images and saving them to {save_dir}....")
 
     if return_existing_result:
@@ -237,7 +238,7 @@ def transform_png_images(image_paths, model, style, return_existing_result=False
 
     logger.debug(f"Processing {num_batch} batches with batch_size={args.batch_size}...")
     for batch_image_paths in image_paths:
-        image_filenames = [path.split("/")[-1] for path in batch_image_paths]
+        image_filenames = [path.split(os.path.sep)[-1] for path in batch_image_paths]
         input_images = [pre_processing(path, style=style, expand_dim=False) for path in batch_image_paths]
         input_images = np.stack(input_images, axis=0)
         transformed_images = model(input_images)
@@ -258,7 +259,7 @@ def save_png_images_as_gif(image_paths, image_filename, style="comparison"):
     gif_path = os.path.join(gif_dir, image_filename)
 
     with imageio.get_writer(gif_path, mode='I') as writer:
-        file_names = sorted(image_paths, key=lambda x: int(x.split('/')[-1].replace('.png', '')))
+        file_names = sorted(image_paths, key=lambda x: int(x.split(os.path.sep)[-1].replace('.png', '')))
         logger.debug(f"Combining {len(file_names)} png images into {gif_path}...")
         for i, filename in enumerate(file_names):
             image = imageio.imread(filename)
@@ -269,7 +270,7 @@ def save_png_images_as_gif(image_paths, image_filename, style="comparison"):
 def convert_gif_to_mp4(gif_path, crf=25):
 
     mp4_dir = os.path.join(os.path.dirname(gif_path), "mp4")
-    gif_file = gif_path.split("/")[-1]
+    gif_file = gif_path.split(os.path.sep)[-1]
     if not os.path.exists(mp4_dir):
         os.makedirs(mp4_dir)
     mp4_path = os.path.join(mp4_dir, gif_file.replace(".gif", ".mp4"))
@@ -309,7 +310,7 @@ def main():
 
     progress_bar = tqdm(image_paths, desc='Transforming')
     for image_path in progress_bar:
-        image_filename = image_path.split("/")[-1]
+        image_filename = image_path.split(os.path.sep)[-1]
         progress_bar.set_postfix(File=image_filename)
 
         if image_filename.endswith(".gif") and not args.ignore_gif:
@@ -317,11 +318,13 @@ def main():
 
             png_paths_list = [png_paths]
             num_images = len(png_paths)
+
             for model, style in zip(models, styles):
-                return_existing_result = result_exist(image_path, style) or args.overwrite
+                return_existing_result = result_exist(image_path, style) and not args.overwrite
 
                 transformed_png_paths = transform_png_images(png_paths, model, style,
                                                              return_existing_result=return_existing_result)
+                
                 png_paths_list.append(transformed_png_paths)
 
                 if not return_existing_result:
