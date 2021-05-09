@@ -5,3 +5,6 @@ tensorflowjs==1.0.1
 tqdm
 imageio
 #tb-nightly>=1.14.0a20190505
+imageio-ffmpeg
+visvis
+opencv-python
