@@ -10,10 +10,8 @@ from tqdm import tqdm
 from datetime import datetime
 from style_transfer.cartoongan import cartoongan
 
-
 STYLES = ["shinkai", "hayao", "hosoda", "paprika"]
 VALID_EXTENSIONS = ['jpg', 'png', 'gif', 'JPG']
-
 
 parser = argparse.ArgumentParser(description="transform real world images to specified cartoon style(s)")
 parser.add_argument("--styles", nargs="+", default=[STYLES[0]],
@@ -62,7 +60,6 @@ parser.add_argument("--show_tf_cpp_log", action="store_true")
 args = parser.parse_args()
 
 TEMPORARY_DIR = os.path.join(f"{args.output_dir}", ".tmp")
-
 
 logger = logging.getLogger("Cartoonizer")
 logger.propagate = False
@@ -115,11 +112,20 @@ def post_processing(transformed_image, style):
     return transformed_image
 
 
-def save_transformed_image(output_image, img_filename, save_dir):
-    if not os.path.exists(save_dir):
+def get_output_filename(output_dir, style, img_filename, create_dir=True):
+    save_dir = os.path.join(output_dir, style)
+    output_filename = os.path.join(save_dir, img_filename)
+
+    if create_dir and not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    transformed_image_path = os.path.join(save_dir, img_filename)
+    return output_filename
+
+
+def save_transformed_image(output_image, transformed_image_path):
+    save_dir = os.path.dirname(transformed_image_path)
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
 
     if output_image is not None:
         image = PIL.Image.fromarray(output_image.astype("uint8"))
@@ -244,15 +250,16 @@ def transform_png_images(image_paths, model, style, return_existing_result=False
         transformed_images = model(input_images)
         output_images = [post_processing(image, style=style)
                          for image in np.split(transformed_images, transformed_images.shape[0])]
-        paths = [save_transformed_image(img, f, save_dir)
-                 for img, f in zip(output_images, image_filenames)]
+
+        output_image_files = [os.path.join(save_dir, f) for f in image_filenames]
+        paths = [save_transformed_image(img, f)
+                 for img, f in zip(output_images, output_image_files)]
         transformed_image_paths.extend(paths)
 
     return transformed_image_paths
 
 
 def save_png_images_as_gif(image_paths, image_filename, style="comparison"):
-
     gif_dir = os.path.join(args.output_dir, style)
     if not os.path.exists(gif_dir):
         os.makedirs(gif_dir)
@@ -268,7 +275,6 @@ def save_png_images_as_gif(image_paths, image_filename, style="comparison"):
 
 
 def convert_gif_to_mp4(gif_path, crf=25):
-
     mp4_dir = os.path.join(os.path.dirname(gif_path), "mp4")
     gif_file = gif_path.split(os.path.sep)[-1]
     if not os.path.exists(mp4_dir):
@@ -280,11 +286,76 @@ def convert_gif_to_mp4(gif_path, crf=25):
 
 
 def result_exist(image_path, style):
-    return os.path.exists(os.path.join(args.output_dir, style, image_path.split("/")[-1]))
+    return os.path.exists(os.path.join(args.output_dir, style, image_path.split(os.path.sep)[-1]))
+
+
+class GifTransform(object):
+    def __init__(self, image_path, convert_to_mp4=True, overwrite=True):
+        self.image_path = image_path
+        self.image_filename = os.path.basename(self.image_path)
+        self.png_paths = convert_gif_to_png(self.image_path)
+        self.png_paths_list = [self.png_paths]
+        self.convert_to_mp4 = convert_to_mp4
+        self.overwrite = overwrite
+
+    def convert(self, model, style ):
+        return_existing_result = result_exist(self.image_path, style) and not self.overwrite
+
+        transformed_png_paths = transform_png_images(self.png_paths, model, style,
+                                                     return_existing_result=return_existing_result)
+
+        self.png_paths_list.append(transformed_png_paths)
+
+        if not return_existing_result:
+            gif_path = save_png_images_as_gif(transformed_png_paths, self.image_filename, style)
+            if self.convert_to_mp4:
+                convert_gif_to_mp4(gif_path)
+
+    def gen_comparison(self):
+        num_images = len(self.png_paths)
+
+        rearrange_paths_list = [[l[i] for l in self.png_paths_list] for i in range(num_images)]
+
+        save_dir = os.path.join(TEMPORARY_DIR, self.image_filename.replace(".gif", ""), "comparison")
+
+        combined_image_paths = list()
+        for image_paths in rearrange_paths_list:
+            path = save_concatenated_image(image_paths, image_folder=save_dir)
+            combined_image_paths.append(path)
+
+        gif_path = save_png_images_as_gif(combined_image_paths, self.image_filename)
+        if self.convert_to_mp4:
+            convert_gif_to_mp4(gif_path)
+
+        return gif_path
+
+
+class ImageTransform(object):
+    def __init__(self, image_path, overwrite=True):
+        self.image_path = image_path
+        self.image_filename = os.path.basename(self.image_path)
+        self.related_image_paths = [image_path]
+        self.overwrite = overwrite
+
+    def convert(self, model, style):
+        transformed_image_path = get_output_filename(args.output_dir, style, self.image_filename)
+        return_existing_result = result_exist(self.image_path, style) and not self.overwrite
+
+        if not return_existing_result:
+            input_image = pre_processing(self.image_path, style=style)
+            transformed_image = model(input_image)
+            output_image = post_processing(transformed_image, style=style)
+            transformed_image_path = save_transformed_image(output_image, transformed_image_path)
+
+        self.related_image_paths.append(transformed_image_path)
+
+        return transformed_image_path
+
+    def gen_comparison(self):
+        save_concatenated_image(self.related_image_paths)
 
 
 def main():
-
     start = datetime.now()
     logger.info(f"Transformed images will be saved to `{args.output_dir}` folder.")
     if not os.path.exists(args.output_dir):
@@ -313,57 +384,19 @@ def main():
         image_filename = image_path.split(os.path.sep)[-1]
         progress_bar.set_postfix(File=image_filename)
 
+        transform = None
         if image_filename.endswith(".gif") and not args.ignore_gif:
-            png_paths = convert_gif_to_png(image_path)
-
-            png_paths_list = [png_paths]
-            num_images = len(png_paths)
-
-            for model, style in zip(models, styles):
-                return_existing_result = result_exist(image_path, style) and not args.overwrite
-
-                transformed_png_paths = transform_png_images(png_paths, model, style,
-                                                             return_existing_result=return_existing_result)
-                
-                png_paths_list.append(transformed_png_paths)
-
-                if not return_existing_result:
-                    gif_path = save_png_images_as_gif(transformed_png_paths, image_filename, style)
-                    if args.convert_gif_to_mp4:
-                        convert_gif_to_mp4(gif_path)
-
-            rearrange_paths_list = [[l[i] for l in png_paths_list] for i in range(num_images)]
-
-            save_dir = os.path.join(TEMPORARY_DIR, image_filename.replace(".gif", ""), "comparison")
-
-            combined_image_paths = list()
-            for image_paths in rearrange_paths_list:
-                path = save_concatenated_image(image_paths, image_folder=save_dir)
-                combined_image_paths.append(path)
-
-            if not args.skip_comparison:
-                gif_path = save_png_images_as_gif(combined_image_paths, image_filename)
-                if args.convert_gif_to_mp4:
-                    convert_gif_to_mp4(gif_path)
-
+            transform = GifTransform(image_path, args.convert_gif_to_mp4, args.overwrite)
         else:
-            related_image_paths = [image_path]
+            transform = ImageTransform(image_path, args.overwrite)
+
+        if transform is not None:
             for model, style in zip(models, styles):
-                input_image = pre_processing(image_path, style=style)
-                save_dir = os.path.join(args.output_dir, style)
-                return_existing_result = result_exist(image_path, style) and not args.overwrite
-
-                if not return_existing_result:
-                    transformed_image = model(input_image)
-                    output_image = post_processing(transformed_image, style=style)
-                    transformed_image_path = save_transformed_image(output_image, image_filename, save_dir)
-                else:
-                    transformed_image_path = save_transformed_image(None, image_filename, save_dir)
-
-                related_image_paths.append(transformed_image_path)
+                transform.convert(model, style)
 
             if not args.skip_comparison:
-                save_concatenated_image(related_image_paths)
+                transform.gen_comparison()
+
     progress_bar.close()
 
     time_elapsed = datetime.now() - start
